@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>🔐 Langage Secret</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>body{font-family:system-ui}</style>
+</head>
+<body class="min-h-screen bg-gray-100 flex items-center justify-center p-6">
+  <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-xl">
+    <h1 class="text-2xl font-bold text-center mb-2">🔐 Langage Secret</h1>
+    <p class="text-center text-sm text-gray-500 mb-4">Par I.B. & C.GPT</p>
+
+    <div class="mb-3">
+      <label class="text-sm font-medium">Clef 1</label>
+      <input id="secretCode" type="password" inputmode="numeric" maxlength="3" class="w-full border rounded-xl p-2 mt-1" autocomplete="off" />
+    </div>
+
+    <div class="mb-3">
+      <label class="text-sm font-medium">Clef 2</label>
+      <input id="secondKey" type="password" inputmode="numeric" maxlength="3" class="w-full border rounded-xl p-2 mt-1" autocomplete="off" />
+    </div>
+
+    <div class="mb-3">
+      <label class="text-sm font-medium">Passphrase (optionnelle)</label>
+      <input id="passphrase" type="password" class="w-full border rounded-xl p-2 mt-1" autocomplete="new-password" />
+    </div>
+
+    <div class="flex gap-2 mb-4">
+      <button id="senderBtn" class="flex-1 py-2 rounded-xl bg-black text-white">Cryptage</button>
+      <button id="receiverBtn" class="flex-1 py-2 rounded-xl bg-gray-200">Décryptage</button>
+    </div>
+
+    <textarea id="input" class="w-full border rounded-xl p-3 mb-4" rows="5"></textarea>
+    <button id="actionBtn" class="w-full bg-black text-white py-3 rounded-xl mb-3">Crypter</button>
+    <textarea id="output" class="w-full border rounded-xl p-3 mb-2 transition duration-200" rows="4" style="filter: blur(10px);"></textarea>
+
+<button id="revealBtn" class="w-full bg-gray-300 text-black py-2 rounded-xl mb-2 hidden">👁️ Afficher le message</button>
+
+    <div class="flex gap-2">
+      <button id="destroyBtn" class="flex-1 bg-red-600 text-white py-2 rounded-xl hidden">🧨 Détruire</button>
+      <button id="wipeBtn" class="flex-1 bg-gray-200 text-black py-2 rounded-xl">Effacer tout</button>
+    </div>
+
+    <p id="warning" class="text-center text-xs text-red-500 mt-3"></p>
+  </div>
+
+<script>
+let mode = "sender";
+let attempts = 0;
+const BLOCK_DURATION_MS = 48 * 60 * 60 * 1000;
+
+const senderBtn = document.getElementById('senderBtn');
+const receiverBtn = document.getElementById('receiverBtn');
+const actionBtn = document.getElementById('actionBtn');
+const input = document.getElementById('input');
+const output = document.getElementById('output');
+const destroyBtn = document.getElementById('destroyBtn');
+const revealBtn = document.getElementById('revealBtn');
+const wipeBtn = document.getElementById('wipeBtn');
+const warning = document.getElementById('warning');
+const secret1 = document.getElementById('secretCode');
+const secret2 = document.getElementById('secondKey');
+const passphrase = document.getElementById('passphrase');
+
+function setModeColors(){
+  if(mode === 'sender'){
+    senderBtn.className='flex-1 py-2 rounded-xl bg-black text-white';
+    receiverBtn.className='flex-1 py-2 rounded-xl bg-gray-200';
+  } else {
+    receiverBtn.className='flex-1 py-2 rounded-xl bg-black text-white';
+    senderBtn.className='flex-1 py-2 rounded-xl bg-gray-200';
+  }
+}
+
+function isBlocked(){
+  const until = parseInt(localStorage.getItem('blockedUntil') || '0');
+  if(Date.now() < until){
+    const h = Math.ceil((until-Date.now())/3600000);
+    warning.innerText = '🔒 Bloqué ' + h + 'h';
+    return true;
+  }
+  return false;
+}
+
+function block48h(){
+  localStorage.setItem('blockedUntil', Date.now()+BLOCK_DURATION_MS);
+  warning.innerText = '🔒 Bloqué 48h';
+}
+
+function destroyAll(reason=''){
+  input.value='';
+  output.value='';
+  output.style.filter = 'blur(10px)';
+  secret1.value='';
+  secret2.value='';
+  passphrase.value='';
+  destroyBtn.classList.add('hidden');
+  revealBtn.classList.add('hidden');
+  attempts = 0;
+  if(reason) warning.innerText = reason;
+}
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+function b64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function from64(b){ const bin=atob(b); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a.buffer; }
+
+async function getKey(){
+  const k1 = secret1.value.trim();
+  const k2 = secret2.value.trim();
+  const pass = passphrase.value || '';
+  if(!/^[0-9]{3}$/.test(k1) || !/^[0-9]{3}$/.test(k2)) throw new Error('Clés invalides');
+
+  const date = new Date();
+  const base = `${date.getDate()}${date.getMonth()+1}|${k1}|${k2}|${pass}`;
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(base), {name:'PBKDF2'}, false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('salt'),iterations:150000,hash:'SHA-256'}, baseKey, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']);
+}
+
+async function encryptMessage(msg){
+  const key = await getKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const exp = Date.now() + 5*60*60*1000;
+  const payload = exp + '::' + msg;
+  const cipher = await crypto.subtle.encrypt({name:'AES-GCM',iv}, key, enc.encode(payload));
+  return b64(iv) + '.' + b64(cipher);
+}
+
+async function decryptMessage(blob){
+  const key = await getKey();
+  const parts = blob.split('.');
+  if(parts.length !== 2) throw new Error('Format invalide');
+  const iv = new Uint8Array(from64(parts[0]));
+  const plainBuf = await crypto.subtle.decrypt({name:'AES-GCM',iv}, key, from64(parts[1]));
+  const plain = dec.decode(plainBuf);
+  const pieces = plain.split('::');
+  if(pieces.length !== 2) throw new Error('Données corrompues');
+  if(Date.now() > parseInt(pieces[0])) throw new Error('Message expiré');
+  return pieces[1];
+}
+
+senderBtn.onclick = ()=>{
+  mode='sender';
+  actionBtn.innerText='Crypter';
+  destroyBtn.classList.add('hidden');
+  revealBtn.classList.add('hidden');
+  warning.innerText='';
+  input.value=''; output.value='';
+  setModeColors();
+};
+
+receiverBtn.onclick = ()=>{
+  mode='receiver';
+  actionBtn.innerText='Décrypter';
+  destroyBtn.classList.add('hidden');
+  revealBtn.classList.add('hidden');
+  warning.innerText='';
+  input.value=''; output.value='';
+  setModeColors();
+};
+
+actionBtn.onclick = async ()=>{
+  try{
+    if(isBlocked()) return;
+    if(!input.value.trim()) throw new Error('Message vide');
+    if(mode==='sender'){
+      output.value = await encryptMessage(input.value.trim());
+      output.style.filter = 'none'; // ✅ le message crypté reste VISIBLE
+      revealBtn.classList.add('hidden');
+      destroyBtn.classList.add('hidden');
+      attempts=0;
+    } else {
+      output.value = await decryptMessage(input.value.trim());
+      output.style.filter = 'blur(10px)';
+      revealBtn.innerText = '👁️ Afficher le message';
+      revealBtn.classList.remove('hidden');
+      destroyBtn.classList.remove('hidden');
+      attempts=0;
+    }
+  }catch(e){
+    attempts++;
+    if(attempts>=3) block48h();
+    warning.innerText = 'Erreur ❌ ('+attempts+'/3) ' + e.message;
+  }
+};
+
+destroyBtn.onclick = ()=>{
+  destroyAll('Message détruit');
+};
+
+revealBtn.onclick = ()=>{
+  if(output.style.filter === 'blur(10px)'){
+    output.style.filter = 'none';
+    revealBtn.innerText = '🧨 Reflouter / Détruire';
+  } else {
+    destroyAll('Message reflouté puis détruit');
+  }
+};
+
+wipeBtn.onclick = ()=>{
+  destroyAll('Tout effacé');
+};
+
+// 🔥 DESTRUCTION TOTALE SI ESPIONNAGE
+
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){
+    destroyAll('👁️ Changement d’onglet → tout effacé');
+  }
+});
+
+window.addEventListener('blur', ()=>{
+  destroyAll('🔒 Perte de focus → tout effacé');
+});
+
+document.addEventListener('mouseleave', ()=>{
+  destroyAll('🖱️ Souris hors de la page → tout effacé');
+});
+
+setModeColors();
+</script>
+</body>
+</html>
